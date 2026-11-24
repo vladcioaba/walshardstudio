@@ -62,10 +62,21 @@ jobs:
 
       - name: Clone axmol (cache miss)
         if: steps.cache-axmol.outputs.cache-hit != 'true'
+        # bash on every OS: the `\` continuations below are not valid in
+        # pwsh, which is the Windows runner default.
+        shell: bash
         run: |
           git clone --depth 1 --branch ${{ env.AXMOL_REF }} \
             https://github.com/axmolengine/axmol \
             ${{ runner.workspace }}/axmol
+
+      # axmol's CMake requires the axslcc shader compiler under
+      # <axmol>/tools/external; setup.ps1 downloads it (and the other
+      # 1kiss toolchain bits). Fast no-op when the tools are cached.
+      - name: Setup axmol toolchain
+        shell: pwsh
+        working-directory: ${{ runner.workspace }}/axmol
+        run: ./setup.ps1
 
       - name: Install macOS deps
         if: matrix.os == 'macos-14'
