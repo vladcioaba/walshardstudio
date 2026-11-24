@@ -94,6 +94,23 @@ cmake --build build.axmol --config Debug
 
 Or open `build.axmol/Walshard.xcodeproj` in Xcode and ⌘R.
 
+Run axmol's `setup.ps1` once after cloning axmol (it downloads the
+`axslcc` shader compiler that CMake needs).
+
+### Platforms
+
+| Platform | Status |
+|---|---|
+| macOS (arm64) | ✅ Supported |
+| Linux | 🚧 Scaffolded, never built — **help wanted** |
+| Windows | 🚧 Scaffolded, never built — **help wanted** |
+
+Entry points, Windows resources, platform guards and CI jobs for Linux
+and Windows are in the tree; nobody has compiled them yet.
+[`PORTING.md`](PORTING.md) has the build steps, a done/todo checklist,
+and the known blockers. If you have a Linux or Windows machine, a PR
+that just gets it to configure is a real contribution.
+
 ## Run
 
 ```bash
@@ -173,9 +190,9 @@ How to contribute:
 1. Fork on GitHub.
 2. Branch off `main`. Keep commits scoped (one logical change each).
 3. Run the macOS build (`cmake --build build.axmol --config Debug`)
-   and confirm it stays green. If you touched Linux/Windows code
-   paths, ping the maintainer to verify CI; cross-platform changes
-   are reviewed extra carefully.
+   and confirm it stays green. Linux/Windows ports: see
+   [`PORTING.md`](PORTING.md); open an issue first so two people
+   don't port the same thing.
 4. Open a PR. Brief description, screenshot if it's UI, and a note
    on what you tested.
 

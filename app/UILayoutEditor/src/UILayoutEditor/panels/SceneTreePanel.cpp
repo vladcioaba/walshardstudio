@@ -9,8 +9,8 @@
 
 #include "axmol.h"
 
-#include "imgui/imgui.h"
-#include "imgui/imgui_internal.h"
+#include "ImGui/imgui.h"
+#include "ImGui/imgui_internal.h"
 
 #include <unordered_set>
 

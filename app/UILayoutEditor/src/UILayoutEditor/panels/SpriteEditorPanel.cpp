@@ -9,7 +9,7 @@
 #include "UILayoutEditor/Editor.h"
 #include "UILayoutEditor/PlistAtlas.h"
 
-#include "imgui/imgui.h"
+#include "ImGui/imgui.h"
 
 #include "axmol.h"
 #include "ImGui/ImGuiPresenter.h"

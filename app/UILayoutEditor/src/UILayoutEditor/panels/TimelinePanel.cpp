@@ -4,8 +4,8 @@
 #include "UILayoutEditor/CsdModel.h"
 #include "UILayoutEditor/Timeline.h"
 
-#include "imgui/imgui.h"
-#include "imgui/imgui_internal.h"
+#include "ImGui/imgui.h"
+#include "ImGui/imgui_internal.h"
 
 #include <algorithm>
 #include <climits>

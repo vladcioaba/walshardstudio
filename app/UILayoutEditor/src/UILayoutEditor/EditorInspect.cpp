@@ -9,7 +9,7 @@
 #include "UILayoutEditor/Editor.h"
 #include "UILayoutEditor/Log.h"
 
-#include "imgui/imgui.h"
+#include "ImGui/imgui.h"
 
 #include "axmol.h"
 #include "ui/UILayout.h"

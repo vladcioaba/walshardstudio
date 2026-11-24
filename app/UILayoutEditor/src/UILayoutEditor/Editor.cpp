@@ -6,8 +6,8 @@
 #include "UILayoutEditor/PlistAtlas.h"
 #include "UILayoutEditor/panels/Panels.h"
 
-#include "imgui/imgui.h"
-#include "imgui/imgui_internal.h"  // DockBuilder API + central-node lookup
+#include "ImGui/imgui.h"
+#include "ImGui/imgui_internal.h"  // DockBuilder API + central-node lookup
 
 #include "axmol.h"
 #include "ui/UIWidget.h"
@@ -25,7 +25,7 @@
 #include <system_error>
 #include <unordered_map>
 #include <unordered_set>
-#include <unistd.h>
+#include "UILayoutEditor/PlatformCompat.h"  // getpid, popen
 #if !defined(_WIN32)
 #    include <fcntl.h>
 #endif

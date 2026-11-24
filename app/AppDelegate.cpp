@@ -3,8 +3,8 @@
 #include "cocostudio/ActionTimeline/CSLoader.h"
 #include "cocostudio/FlatBuffersSerialize.h"
 #include "ImGui/ImGuiPresenter.h"
-#include "imgui/imgui.h"
-#include "imgui/imgui_internal.h"
+#include "ImGui/imgui.h"
+#include "ImGui/imgui_internal.h"
 #include "platform/RenderViewImpl.h"
 #include "UILayoutEditor/Editor.h"
 #include "UILayoutEditor/CsdModel.h"
@@ -16,6 +16,7 @@
 #include "DragLabel.h"
 #include "IpcBridge.h"
 #include "PlatformSpawn.h"
+#include "UILayoutEditor/PlatformCompat.h"  // getpid, popen
 
 #include "GLFW/glfw3.h"
 

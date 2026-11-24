@@ -66,9 +66,11 @@ jobs:
         # pwsh, which is the Windows runner default.
         shell: bash
         run: |
+          # Quoted: on Windows runner.workspace is "D:\a\<repo>" and bash
+          # would eat the unquoted backslashes.
           git clone --depth 1 --branch ${{ env.AXMOL_REF }} \
             https://github.com/axmolengine/axmol \
-            ${{ runner.workspace }}/axmol
+            "${{ runner.workspace }}/axmol"
 
       # axmol's CMake requires the axslcc shader compiler under
       # <axmol>/tools/external; setup.ps1 downloads it (and the other
