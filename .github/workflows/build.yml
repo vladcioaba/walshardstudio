@@ -1,6 +1,6 @@
 name: build
 
-# CI: macOS (arm64) + Linux (x86_64) matrix.
+# CI: macOS (arm64) + Linux (x86_64) + Windows (x64) matrix.
 #
 # Triggers:
 #   * push to main         → build + upload artifact (30-day retention)
@@ -21,14 +21,24 @@ on:
 env:
   AXMOL_REF: v2.9.1
 
+# Cancel superseded runs on the same ref to save runner minutes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Needed by softprops/action-gh-release to upload assets on tag.
+permissions:
+  contents: write
+
 jobs:
   build:
     name: ${{ matrix.label }}
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
+          - os: macos-15
             label: macos-arm64
             artifact: Walshard-macOS-arm64.zip
           - os: ubuntu-22.04
@@ -52,13 +62,26 @@ jobs:
 
       - name: Clone axmol (cache miss)
         if: steps.cache-axmol.outputs.cache-hit != 'true'
+        # bash on every OS: the `\` continuations below are not valid in
+        # pwsh, which is the Windows runner default.
+        shell: bash
         run: |
+          # Quoted: on Windows runner.workspace is "D:\a\<repo>" and bash
+          # would eat the unquoted backslashes.
           git clone --depth 1 --branch ${{ env.AXMOL_REF }} \
             https://github.com/axmolengine/axmol \
-            ${{ runner.workspace }}/axmol
+            "${{ runner.workspace }}/axmol"
+
+      # axmol's CMake requires the axslcc shader compiler under
+      # <axmol>/tools/external; setup.ps1 downloads it (and the other
+      # 1kiss toolchain bits). Fast no-op when the tools are cached.
+      - name: Setup axmol toolchain
+        shell: pwsh
+        working-directory: ${{ runner.workspace }}/axmol
+        run: ./setup.ps1
 
       - name: Install macOS deps
-        if: matrix.os == 'macos-14'
+        if: matrix.os == 'macos-15'
         run: brew install librsvg cmake
 
       - name: Install Linux deps
@@ -71,15 +94,18 @@ jobs:
             libxi-dev libxinerama-dev libxrandr-dev libxcursor-dev \
             libgtk-3-dev libssl-dev libuv1-dev \
             libpng-dev libjpeg-dev librsvg2-bin \
-            libfontconfig1-dev libvlc-dev
+            libfontconfig1-dev libvlc-dev \
+            libwebkit2gtk-4.0-dev libxxf86vm-dev libvlccore-dev
 
+      # Runner images ship Python; choco's MSI reinstall fails (1603).
       - name: Install Windows deps
         if: matrix.os == 'windows-2022'
-        run: choco install python --version=3.11.0 -y --no-progress
-        shell: pwsh
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
       - name: Configure (macOS)
-        if: matrix.os == 'macos-14'
+        if: matrix.os == 'macos-15'
         run: |
           cmake -S . -B build -G Xcode \
             -DAX_ROOT=${{ runner.workspace }}/axmol \
@@ -98,10 +124,10 @@ jobs:
         run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DAX_ROOT="${{ runner.workspace }}/axmol"
 
       - name: Build
-        run: cmake --build build --config Release -j
+        run: cmake --build build --config Release --parallel
 
       - name: Package (macOS)
-        if: matrix.os == 'macos-14'
+        if: matrix.os == 'macos-15'
         run: |
           cd build/bin/Walshard/Release
           zip -r ../../../../${{ matrix.artifact }} Walshard.app

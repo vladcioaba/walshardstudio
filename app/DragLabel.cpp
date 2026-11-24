@@ -12,6 +12,14 @@
 #  pragma clang diagnostic ignored "-Wdeprecated-declarations"
 #  include <OpenGL/gl.h>
 #  pragma clang diagnostic pop
+#elif defined(_WIN32)
+// <GL/gl.h> on Windows needs WINAPI/APIENTRY from <windows.h> first.
+#  define WIN32_LEAN_AND_MEAN
+#ifndef NOMINMAX  // keep <windows.h> min/max macros off std::min/std::max
+#    define NOMINMAX
+#endif
+#  include <windows.h>
+#  include <GL/gl.h>
 #else
 #  include <GL/gl.h>
 #endif

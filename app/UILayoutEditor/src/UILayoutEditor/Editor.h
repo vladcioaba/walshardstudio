@@ -694,12 +694,15 @@ private:
     void drawLayerSideOverlay();   // Y extents
     void drawLayerTopOverlay();    // X extents
     void drawMenuBar();
+    void drawStatusToast();   // transient bottom-center feedback toast
 
     // UI state for File menu text-input modals (native dialogs deferred).
     bool _openDialogOpen = false;
     bool _saveAsDialogOpen = false;
     char _pathBuf[1024] = {0};
-    std::string _statusMsg;   // shown briefly in the menu bar after an action
+    std::string _statusMsg;       // latest action result (save/open/export/pack)
+    std::string _statusLastShown; // tracks _statusMsg changes to (re)start toast
+    float       _statusTimer = 0.0f; // seconds remaining on the visible toast
 
     // Undo / redo: full-document XML snapshots. Cheap for .csd-sized files
     // (tens of kB) and immune to dangling pugi::xml_node pointers.
@@ -712,12 +715,16 @@ private:
     Mode _mode = Mode::Edit;
 
     // Dev-only command/inspect channel. Enabled if OCS_INSPECT_PORT is set
-    // in the environment at startup. When OCS_INSPECT_TOKEN is also set,
-    // mutation commands are gated behind `auth <token>` until the editor
-    // has authed once — cheap protection if the loopback port is ever
-    // exposed beyond 127.0.0.1.
+    // in the environment at startup. Every non-read-only command requires
+    // `auth <token>`; the token is OCS_INSPECT_TOKEN or, when unset, a
+    // random per-session token written to `inspectTokenFile()`. Auth is tracked
+    // per connection (a bool owned by each InspectServer worker thread),
+    // NOT editor-wide — so one client's `auth` cannot unlock mutations on
+    // a different, unauthenticated connection.
     InspectServer _inspect;
-    bool          _rpcAuthed = false;
+    static std::string generateInspectToken();
+    std::filesystem::path inspectTokenFile() const;
+    void writeInspectTokenFile(const std::string& token) const;
 
     // Sprite Editor / Catalog plug-points. Typedefs (SpriteNlpHandler /
     // SpriteSearchProvider) live in the public section further down for
@@ -743,8 +750,15 @@ public:
     /// (Sprite Editor, Sprite Catalog) can reuse the mutation
     /// vocabulary without re-implementing it. Pass nullptr for `reply`
     /// when no async-defer is needed (the panels never defer).
+    /// `connAuthed` is the per-connection auth flag (one bool per live
+    /// RPC socket, owned by the InspectServer worker thread). The `auth`
+    /// command flips it; the mutation gate reads it. Pass nullptr for
+    /// internal/recursive replays (panels, script/apply-to-scenes,
+    /// screenshot wrappers) — those originate from an already-authorized
+    /// command and are treated as authed.
     std::string handleInspectCommand(const std::string& line,
-                                     InspectReply* reply = nullptr);
+                                     InspectReply* reply = nullptr,
+                                     bool* connAuthed = nullptr);
 private:
 
     // Pending visual-preview job. Drives the screenshot-then-rollback

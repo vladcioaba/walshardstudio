@@ -13,9 +13,10 @@
 ## Built for agents
 
 Every editor action is exposed as a scriptable command over a TCP
-line protocol on port 9876 (override with `OCS_INSPECT_PORT`). An
-LLM agent — Claude, GPT, Gemini, a local model — can drive the full
-editor workflow without a human in the loop.
+line protocol on `127.0.0.1`. The server is off by default; launch the
+editor with `OCS_INSPECT_PORT=9876` to enable it. An LLM agent —
+Claude, GPT, Gemini, a local model — can drive the full editor
+workflow without a human in the loop.
 
 **MCP bridge included.** A Python Model Context Protocol server lives
 in [`mcp-server/`](mcp-server/) and exposes 26 typed tools over stdio.
@@ -39,10 +40,39 @@ Or drop it into Claude Desktop's `claude_desktop_config.json` —
 | Code gen | `gen-controller` (emit paired `.h/.cpp` with stubs for every binding) |
 | Asset pipeline | `svg-rasterize`, `svg-bake`, `download` |
 | Live observation | `watch on` (subscribe to `EVENT selection/dirty/mode/opened/saved/exported`) |
-| Auth gate | `auth <token>` (set `OCS_INSPECT_TOKEN` to require it) |
+| Auth gate | `auth <token>` — required for every non-read-only command |
 
 Every mutation goes through the same undo stack a human user works
 with — an agent's mistake is one `undo` away from being unmade.
+
+### Security model
+
+- **Loopback only, opt-in.** The server binds `127.0.0.1` and only
+  starts when `OCS_INSPECT_PORT` is set.
+- **Auth is always on.** Read-only inspection (`describe`, `tree`,
+  `dump`, `getattr`, `validate`, …) works without auth. Every other
+  command — mutations, saves, file writes, downloads, simulated input,
+  `watch on` — needs `auth <token>` first on that connection. The token
+  is `OCS_INSPECT_TOKEN` if set; otherwise the editor generates a
+  random token per session and writes it (mode `0600`) to
+  `inspect.token` in the app data dir:
+  - macOS: `~/Library/Application Support/Walshard Studio/inspect.token`
+  - Linux: `$XDG_DATA_HOME/Walshard Studio/inspect.token`
+    (default `~/.local/share/...`)
+  - Windows: `%APPDATA%\Walshard Studio\inspect.token`
+
+  The MCP bridge reads this file automatically. From a shell:
+  ```bash
+  TOK=$(cat ~/Library/Application\ Support/Walshard\ Studio/inspect.token)
+  printf 'auth %s\nsetvisible 0,1 0\n' "$TOK" | nc 127.0.0.1 9876
+  ```
+- **Browser requests are refused.** A connection whose first line looks
+  like HTTP (`POST / HTTP/1.1`, `Host:` …) is dropped before anything
+  runs, so a web page can't drive the editor via `fetch()` to localhost.
+- **Bounded.** At most 16 concurrent connections; a client that stops
+  reading is dropped after a 2 s send timeout.
+- `download` writes only inside the project's assets root (symlinks
+  resolved).
 
 Open-source visual editor for `.csd` / `.csb` scene files used by
 cocos2d-x and axmol game engines. Built on
@@ -63,6 +93,23 @@ cmake --build build.axmol --config Debug
 ```
 
 Or open `build.axmol/Walshard.xcodeproj` in Xcode and ⌘R.
+
+Run axmol's `setup.ps1` once after cloning axmol (it downloads the
+`axslcc` shader compiler that CMake needs).
+
+### Platforms
+
+| Platform | Status |
+|---|---|
+| macOS (arm64) | ✅ Supported |
+| Linux | 🚧 Scaffolded, never built — **help wanted** |
+| Windows | 🚧 Scaffolded, never built — **help wanted** |
+
+Entry points, Windows resources, platform guards and CI jobs for Linux
+and Windows are in the tree; nobody has compiled them yet.
+[`PORTING.md`](PORTING.md) has the build steps, a done/todo checklist,
+and the known blockers. If you have a Linux or Windows machine, a PR
+that just gets it to configure is a real contribution.
 
 ## Run
 
@@ -143,9 +190,9 @@ How to contribute:
 1. Fork on GitHub.
 2. Branch off `main`. Keep commits scoped (one logical change each).
 3. Run the macOS build (`cmake --build build.axmol --config Debug`)
-   and confirm it stays green. If you touched Linux/Windows code
-   paths, ping the maintainer to verify CI; cross-platform changes
-   are reviewed extra carefully.
+   and confirm it stays green. Linux/Windows ports: see
+   [`PORTING.md`](PORTING.md); open an issue first so two people
+   don't port the same thing.
 4. Open a PR. Brief description, screenshot if it's UI, and a note
    on what you tested.
 

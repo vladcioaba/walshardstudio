@@ -6,8 +6,8 @@
 #include "UILayoutEditor/PlistAtlas.h"
 #include "UILayoutEditor/panels/Panels.h"
 
-#include "imgui/imgui.h"
-#include "imgui/imgui_internal.h"  // DockBuilder API + central-node lookup
+#include "ImGui/imgui.h"
+#include "ImGui/imgui_internal.h"  // DockBuilder API + central-node lookup
 
 #include "axmol.h"
 #include "ui/UIWidget.h"
@@ -16,14 +16,19 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <fstream>
 #include <functional>
+#include <random>
 #include <sstream>
 #include <system_error>
 #include <unordered_map>
 #include <unordered_set>
-#include <unistd.h>
+#include "UILayoutEditor/PlatformCompat.h"  // getpid, popen
+#if !defined(_WIN32)
+#    include <fcntl.h>
+#endif
 
 namespace fs = std::filesystem;
 
@@ -266,10 +271,21 @@ Editor::Editor(const fs::path& csdPath) : _csdPath(csdPath)
     scanAssets();
 
     // Dev-only inspect channel. Start iff the port env var is set.
+    // Auth is mandatory: use OCS_INSPECT_TOKEN when given, otherwise
+    // generate a random per-session token and write it to a user-only
+    // file next to recents.txt (inspect.token) for local clients.
     if (const char* p = std::getenv("OCS_INSPECT_PORT"))
     {
         int port = std::atoi(p);
-        if (port > 0) _inspect.start(port);
+        if (port > 0)
+        {
+            const char* envTok = std::getenv("OCS_INSPECT_TOKEN");
+            const bool generated = !(envTok && *envTok);
+            _inspect.setToken(generated ? generateInspectToken()
+                                        : std::string(envTok));
+            if (_inspect.start(port) && generated)
+                writeInspectTokenFile(_inspect.token());
+        }
     }
 }
 
@@ -511,8 +527,9 @@ void Editor::render()
     // Handler may call `reply.defer()` for multi-frame work; in that case
     // we leave the reply un-sent and the editor-side state machine will
     // fulfil the PendingReply on a later frame.
-    _inspect.drain([this](const std::string& line, InspectReply& reply) {
-        std::string s = handleInspectCommand(line, &reply);
+    _inspect.drain([this](const std::string& line, InspectReply& reply,
+                          bool& connAuthed) {
+        std::string s = handleInspectCommand(line, &reply, &connAuthed);
         if (!reply.delivered()) reply.send(std::move(s));
     });
 
@@ -786,7 +803,11 @@ void Editor::render()
             // Centre the chip vertically in the strip so the neon ring
             // has equal clearance top and bottom — clear of the dock
             // divider above and the canvas top below.
-            const float chipTargetH = ImGui::GetFontSize() * 1.6f;
+            // Clamp to the strip height: at large font sizes 1.6×font can
+            // exceed the Mode panel's content region and the buttons clip
+            // at top/bottom (the long-standing "Edit/View buttons cut" bug).
+            const float chipTargetH =
+                std::min(ImGui::GetFontSize() * 1.6f, std::max(1.0f, avail.y));
             ImGui::SetCursorPosY(
                 ImGui::GetCursorPosY() +
                 std::max(0.0f, (avail.y - chipTargetH) * 0.5f));
@@ -1069,7 +1090,12 @@ void Editor::render()
         {
             ax::Node* n = _axOrderDfs[i];
             if (!n) continue;
-            n->setPositionZ(spacing * static_cast<float>(i));
+            // Only write when the value actually changes — setPositionZ
+            // dirties the node's transform, so re-applying the same Z
+            // every frame (common when spacing == 0) forces a needless
+            // full-tree transform recompute.
+            const float z = spacing * static_cast<float>(i);
+            if (n->getPositionZ() != z) n->setPositionZ(z);
         }
     }
 
@@ -1511,6 +1537,50 @@ void Editor::render()
     // once it has acted on the request.
     if (_selectionChanged) _selectionScrollRequested = true;
     _selectionChanged = false;
+
+    drawStatusToast();
+}
+
+// Transient bottom-center toast for `_statusMsg`. On macOS the file
+// actions (save/open/export) come from the native menu, not an ImGui
+// menu bar — and `drawMenuBar` (the only other renderer of _statusMsg)
+// is never called — so without this a failed save would be completely
+// silent. Shows the latest message for a few seconds, tinted red on
+// failure, then fades out.
+void Editor::drawStatusToast()
+{
+    if (_statusMsg != _statusLastShown)
+    {
+        _statusLastShown = _statusMsg;
+        if (!_statusMsg.empty()) _statusTimer = 4.0f;
+    }
+    if (_statusTimer <= 0.0f || _statusMsg.empty()) return;
+    _statusTimer -= ImGui::GetIO().DeltaTime;
+
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    const float pad = 24.0f;
+    const ImVec2 pos(vp->WorkPos.x + vp->WorkSize.x * 0.5f,
+                     vp->WorkPos.y + vp->WorkSize.y - pad);
+    ImGui::SetNextWindowPos(pos, ImGuiCond_Always, ImVec2(0.5f, 1.0f));
+    const float alpha = std::clamp(_statusTimer, 0.0f, 1.0f);
+    ImGui::SetNextWindowBgAlpha(0.85f * alpha);
+
+    const bool err = _statusMsg.find("failed") != std::string::npos ||
+                     _statusMsg.rfind("ERR", 0) == 0 ||
+                     _statusMsg.find("error") != std::string::npos;
+    ImGui::PushStyleColor(ImGuiCol_Text,
+        err ? ImVec4(1.0f, 0.45f, 0.45f, alpha)
+            : ImVec4(0.85f, 0.95f, 0.85f, alpha));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14, 10));
+    const ImGuiWindowFlags f =
+        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
+        ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoFocusOnAppearing |
+        ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysAutoResize;
+    if (ImGui::Begin("##status_toast", nullptr, f))
+        ImGui::TextUnformatted(_statusMsg.c_str());
+    ImGui::End();
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor();
 }
 
 void Editor::drawPreferencesModal()
@@ -2074,6 +2144,50 @@ std::string Editor::openFromPath(const std::filesystem::path& p)
     _statusMsg = "opened " + p.filename().string();
     emitEvent("opened " + p.string());
     return {};
+}
+
+// ----- inspect token --------------------------------------------------------
+
+std::string Editor::generateInspectToken()
+{
+    // 128 bits from the OS CSPRNG (libc++: arc4random; libstdc++:
+    // /dev/urandom or RDRAND; MSVC: rand_s).
+    std::random_device rd;
+    static const char kHex[] = "0123456789abcdef";
+    std::string out;
+    out.reserve(32);
+    for (int i = 0; i < 4; ++i)
+    {
+        std::uint32_t v = rd();
+        for (int j = 0; j < 8; ++j) { out.push_back(kHex[v & 0xF]); v >>= 4; }
+    }
+    return out;
+}
+
+std::filesystem::path Editor::inspectTokenFile() const
+{
+    return recentsFile().parent_path() / "inspect.token";
+}
+
+void Editor::writeInspectTokenFile(const std::string& token) const
+{
+    const std::filesystem::path path = inspectTokenFile();
+#if defined(_WIN32)
+    // %APPDATA% is already user-private.
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    if (out) out << token << "\n";
+#else
+    // Create 0600 up front so the secret is never world-readable.
+    std::error_code ec;
+    std::filesystem::remove(path, ec);
+    int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_EXCL, 0600);
+    if (fd < 0) { OCS_LOG_WARN("inspect", "cannot write %s", path.c_str()); return; }
+    const std::string line = token + "\n";
+    (void)!::write(fd, line.data(), line.size());
+    ::close(fd);
+#endif
+    std::fprintf(stderr, "[inspect] auth token written to %s\n",
+                 path.string().c_str());
 }
 
 // ----- recents persistence ------------------------------------------------
@@ -4051,7 +4165,7 @@ void Editor::drawEditOverlay()
                 {
                     const auto origin = it->second->convertToWorldSpace(ax::Vec2(0, 0));
                     _dragStartAngleRad =
-                        std::atan2f(world.y - origin.y, world.x - origin.x);
+                        std::atan2(world.y - origin.y, world.x - origin.x);
                     _dragStartRotDeg = it->second->getRotation();
                     _dragMode = DragMode::Rotate;
                     recordEvent("rotate-icon");
@@ -4243,7 +4357,7 @@ void Editor::drawEditOverlay()
                 // in degrees and clockwise-positive (opposite of math atan2).
                 const auto origin = axNode->convertToWorldSpace(ax::Vec2(0, 0));
                 const float curAng =
-                    std::atan2f(world.y - origin.y, world.x - origin.x);
+                    std::atan2(world.y - origin.y, world.x - origin.x);
                 const float deltaDeg =
                     (curAng - _dragStartAngleRad) * (180.0f / 3.14159265358979323846f);
                 float newDeg = _dragStartRotDeg - deltaDeg;   // flip sign
@@ -5279,7 +5393,7 @@ void Editor::drawMessagesBody()
             namespace fs = std::filesystem;
             std::error_code fsec;
             for (auto& e : fs::directory_iterator(
-                     "/tmp/opencocosstudio", fsec))
+                     ipcLogDir(), fsec))
             {
                 if (fsec) break;
                 const auto& p = e.path();
@@ -5288,7 +5402,7 @@ void Editor::drawMessagesBody()
                     name.compare(name.size() - 13, 13,
                                  ".messages.log") == 0)
                 {
-                    if (auto* fp = std::fopen(p.c_str(), "w"))
+                    if (auto* fp = std::fopen(p.string().c_str(), "w"))
                         std::fclose(fp);
                 }
             }

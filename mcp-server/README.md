@@ -12,7 +12,8 @@ mistake is one tool call away from being unmade.
 ## Requirements
 
 - Python **3.10+**
-- A running Walshard Studio instance (the MCP server connects to TCP
+- A running Walshard Studio instance launched with
+  `OCS_INSPECT_PORT=9876` (the MCP server connects to TCP
   127.0.0.1:9876; override with `OCS_INSPECT_PORT`).
 
 ## Install
@@ -78,7 +79,8 @@ it caches server defs at launch).
 |---|---|---|
 | `OCS_INSPECT_PORT` | `9876` | TCP port the editor listens on |
 | `WALSHARD_HOST` | `127.0.0.1` | Override if running the editor over the network (not recommended — no TLS) |
-| `OCS_INSPECT_TOKEN` | unset | Pre-shared auth token; passed via `auth <token>` before commands when set on both sides |
+| `OCS_INSPECT_TOKEN` | unset | Auth token sent via `auth <token>` before each command. When unset, read from the editor's `inspect.token` file (see top-level README → Security model) |
+| `WALSHARD_TOKEN_FILE` | platform default | Override the token file path |
 | `WALSHARD_TIMEOUT_S` | `10` | Per-call socket timeout |
 
 ## Tools shipped (MVP)
@@ -105,8 +107,10 @@ build understands.
 
 - **"connection refused"**: editor is not running. Launch
   `Walshard.app` (open a `.csd` if you want a target scene) first.
-- **"editor error: not authenticated"**: editor was launched with
-  `OCS_INSPECT_TOKEN`; set the same value in the MCP server's env.
+- **"editor error: auth required"**: the bridge couldn't find the
+  token. Check the editor's `inspect.token` file exists (it is written
+  when the server starts), or set `OCS_INSPECT_TOKEN` to the same
+  value on both sides.
 - **Claude Desktop shows the server as red/failed**: tail
   `~/Library/Logs/Claude/mcp-server-walshard.log`; the SDK logs every
   startup error there.

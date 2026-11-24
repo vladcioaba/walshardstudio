@@ -3,8 +3,8 @@
 #include "cocostudio/ActionTimeline/CSLoader.h"
 #include "cocostudio/FlatBuffersSerialize.h"
 #include "ImGui/ImGuiPresenter.h"
-#include "imgui/imgui.h"
-#include "imgui/imgui_internal.h"
+#include "ImGui/imgui.h"
+#include "ImGui/imgui_internal.h"
 #include "platform/RenderViewImpl.h"
 #include "UILayoutEditor/Editor.h"
 #include "UILayoutEditor/CsdModel.h"
@@ -16,6 +16,7 @@
 #include "DragLabel.h"
 #include "IpcBridge.h"
 #include "PlatformSpawn.h"
+#include "UILayoutEditor/PlatformCompat.h"  // getpid, popen
 
 #include "GLFW/glfw3.h"
 
@@ -144,6 +145,13 @@ struct Tab
 
 std::vector<std::unique_ptr<Tab>> gTabs;   // unique_ptr keeps Tab addresses stable
 int                               gActiveTab = -1;
+
+// Deferred close-confirm. When a tab with unsaved edits is asked to
+// close, its path is stashed here and a modal is opened instead of
+// silently dropping the work. Path (not index) survives tab reorders /
+// erases between the request and the user's modal choice.
+std::string                       gPendingClosePath;
+bool                              gOpenCloseModal = false;
 
 // Drag-end detection shared between the EVENT_WINDOW_POSITIONED
 // listener (writes this) and the render loop's monitor-DPI guard
@@ -634,6 +642,72 @@ void closeTab(int idx)
     {
         gActiveTab--;             // indices shifted down after erase
     }
+}
+
+/// Index of the open tab whose document path equals `p`, or -1. Paths
+/// are unique (openTab dedups), so this is an unambiguous handle that
+/// survives tab reorders between a close request and the modal choice.
+int indexForPath(const std::string& p)
+{
+    for (int i = 0; i < static_cast<int>(gTabs.size()); ++i)
+        if (gTabs[i]->csdPath == p) return i;
+    return -1;
+}
+
+/// Confirm-on-close modal for tabs with unsaved edits. Opened from the
+/// tab-bar close loop when a dirty tab is asked to close; offers
+/// Save / Discard / Cancel so a stray click on the tab's X can't drop
+/// work silently.
+void drawCloseConfirmModal()
+{
+    static const char* kId = "Unsaved changes##closetab";
+    if (gOpenCloseModal) { ImGui::OpenPopup(kId); gOpenCloseModal = false; }
+
+    const ImVec2 center = ImGui::GetMainViewport()->GetCenter();
+    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+
+    if (!ImGui::BeginPopupModal(kId, nullptr,
+                                ImGuiWindowFlags_AlwaysAutoResize))
+        return;
+
+    const int idx = indexForPath(gPendingClosePath);
+    if (idx < 0)   // tab vanished out from under us — nothing to confirm
+    {
+        ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+        return;
+    }
+
+    Tab& t = *gTabs[idx];
+    ImGui::Text("Save changes to \"%s\" before closing?",
+                t.label.empty() ? t.csdPath.c_str() : t.label.c_str());
+    ImGui::Spacing();
+
+    const ImVec2 btn(110, 0);
+    if (ImGui::Button("Save", btn))
+    {
+        if (t.editor) t.editor->saveToCurrent();
+        // saveToCurrent clears dirty only on success. Close only if the
+        // save actually stuck; on failure keep the tab open (the editor's
+        // status toast surfaces the error) and dismiss the modal.
+        const bool clean =
+            !t.editor || !t.editor->doc() || !t.editor->doc()->dirty;
+        if (clean) closeTab(idx);
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Discard", btn))
+    {
+        closeTab(idx);
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel", btn) ||
+        ImGui::IsKeyPressed(ImGuiKey_Escape))
+    {
+        ImGui::CloseCurrentPopup();   // keep the tab; user changed their mind
+    }
+    ImGui::EndPopup();
 }
 
 /// Fork off a fresh Walshard Studio process that opens `csdPath` as
@@ -1404,8 +1478,15 @@ bool renderTabBar()
 
                 bool open = true;
                 ImGui::PushID(tab.csdPath.c_str());
+                // Show ImGui's unsaved-document dot when the tab's doc
+                // has pending edits, so the user can see at a glance
+                // which tabs would lose work on close.
+                const bool tabDirty = tab.editor && tab.editor->doc() &&
+                                      tab.editor->doc()->dirty;
                 const bool itemOpen = ImGui::BeginTabItem(
-                    tab.label.c_str(), &open, ImGuiTabItemFlags_None);
+                    tab.label.c_str(), &open,
+                    tabDirty ? ImGuiTabItemFlags_UnsavedDocument
+                             : ImGuiTabItemFlags_None);
 
                 // Capture this tab's screen X extent so future frames
                 // (and peer processes) can locate it.
@@ -1681,9 +1762,26 @@ bool renderTabBar()
     viewport->WorkSize.y -= barHeight;
 
     // Defer close requests and activation changes until the tab bar is
-    // fully iterated so we don't invalidate `tab` mid-loop.
+    // fully iterated so we don't invalidate `tab` mid-loop. A tab with
+    // unsaved edits routes through a confirm modal instead of closing.
     for (int i = static_cast<int>(gTabs.size()) - 1; i >= 0; --i)
-        if (gTabs[i]->requestClose) closeTab(i);
+    {
+        if (!gTabs[i]->requestClose) continue;
+        Tab& t = *gTabs[i];
+        const bool dirty =
+            t.editor && t.editor->doc() && t.editor->doc()->dirty;
+        if (dirty)
+        {
+            t.requestClose   = false;       // consumed; the modal decides
+            gPendingClosePath = t.csdPath;
+            gOpenCloseModal   = true;
+        }
+        else
+        {
+            closeTab(i);
+        }
+    }
+    drawCloseConfirmModal();
 
     if (!gTabs.empty())
     {
@@ -2312,7 +2410,33 @@ bool AppDelegate::applicationDidFinishLaunching()
         // the text actually changes (cheap string compare) so we
         // don't stat-thrash /tmp for peers polling mtime. Extend to
         // Properties / Scene / ... as later panels get serializers.
-        if (auto* e = activeEditor())
+        //
+        // All of this (five panel serializations + a full pretty-printed
+        // XML dump of the doc) used to run every frame even with no
+        // detached panel open — tens of MB/s of throwaway allocations on
+        // a large scene. Only do it while at least one detached panel
+        // process exists; on the transition into that state clear the
+        // caches so the newcomer gets a fresh copy of every mirror.
+        static std::string sLastMessagesMirror;
+        static std::string sLastPropertiesMirror;
+        static std::string sLastSceneMirror;
+        static std::string sLastAssetsMirror;
+        static std::string sLastLayoutMirror;
+        static std::string sLastDocPath;
+        static std::string sLastDocXml;
+        static bool        sHadDetachedPeers = false;
+        const bool haveDetachedPeers =
+            !ocs::ipc::listDetachedPanels().empty();
+        if (haveDetachedPeers && !sHadDetachedPeers)
+        {
+            for (auto* str : {&sLastMessagesMirror, &sLastPropertiesMirror,
+                              &sLastSceneMirror, &sLastAssetsMirror,
+                              &sLastLayoutMirror, &sLastDocPath,
+                              &sLastDocXml})
+                str->clear();
+        }
+        sHadDetachedPeers = haveDetachedPeers;
+        if (auto* e = haveDetachedPeers ? activeEditor() : nullptr)
         {
             auto mirror = [&](const char* name, std::string& last) {
                 std::string body = e->serializePanelMirror(name);
@@ -2322,11 +2446,6 @@ bool AppDelegate::applicationDidFinishLaunching()
                     last = std::move(body);
                 }
             };
-            static std::string sLastMessagesMirror;
-            static std::string sLastPropertiesMirror;
-            static std::string sLastSceneMirror;
-            static std::string sLastAssetsMirror;
-            static std::string sLastLayoutMirror;
             mirror("Messages",   sLastMessagesMirror);
             mirror("Properties", sLastPropertiesMirror);
             mirror("Scene",      sLastSceneMirror);
@@ -2337,8 +2456,6 @@ bool AppDelegate::applicationDidFinishLaunching()
             // every panel feature (lock icon, drag-drop, expand/
             // collapse, context menus) without us re-implementing
             // each one in the simplified mirror renderer.
-            static std::string sLastDocPath;
-            static std::string sLastDocXml;
             if (auto* d = e->doc())
             {
                 std::string body = d->path.string();

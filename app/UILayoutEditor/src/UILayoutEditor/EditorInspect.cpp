@@ -9,7 +9,7 @@
 #include "UILayoutEditor/Editor.h"
 #include "UILayoutEditor/Log.h"
 
-#include "imgui/imgui.h"
+#include "ImGui/imgui.h"
 
 #include "axmol.h"
 #include "ui/UILayout.h"
@@ -29,11 +29,112 @@
 #include <unordered_set>
 #include <vector>
 
+#ifndef _WIN32
+#include <spawn.h>
+#include <sys/wait.h>
+#include <unistd.h>
+extern char** environ;
+#endif
+
 namespace opencs
 {
 
 namespace
 {
+
+/// Run `argv` directly (NO shell — argv[0] is the executable, rest are
+/// literal arguments) and capture combined stdout/stderr into `out`.
+/// Returns the child's exit code, or -1 if the process couldn't be
+/// spawned. Because no shell is involved, argument contents (URLs,
+/// paths) cannot be interpreted as shell metacharacters — this closes
+/// the command-injection surface that a `popen("/bin/sh -c ...")` had.
+int runCapture(const std::vector<std::string>& argv, std::string& out)
+{
+    out.clear();
+#ifdef _WIN32
+    (void)argv;
+    return -1;  // Windows port has no curl/rsvg shell-out path.
+#else
+    if (argv.empty()) return -1;
+    int pipefd[2];
+    if (pipe(pipefd) != 0) return -1;
+
+    std::vector<char*> cargv;
+    cargv.reserve(argv.size() + 1);
+    for (const auto& a : argv) cargv.push_back(const_cast<char*>(a.c_str()));
+    cargv.push_back(nullptr);
+
+    posix_spawn_file_actions_t fa;
+    posix_spawn_file_actions_init(&fa);
+    posix_spawn_file_actions_adddup2(&fa, pipefd[1], STDOUT_FILENO);
+    posix_spawn_file_actions_adddup2(&fa, pipefd[1], STDERR_FILENO);
+    posix_spawn_file_actions_addclose(&fa, pipefd[0]);
+    posix_spawn_file_actions_addclose(&fa, pipefd[1]);
+
+    pid_t pid = 0;
+    int rc = posix_spawn(&pid, cargv[0], &fa, nullptr, cargv.data(), environ);
+    posix_spawn_file_actions_destroy(&fa);
+    close(pipefd[1]);
+    if (rc != 0) { close(pipefd[0]); return -1; }
+
+    char buf[1024];
+    ssize_t n;
+    while ((n = read(pipefd[0], buf, sizeof(buf))) > 0) out.append(buf, n);
+    close(pipefd[0]);
+
+    int status = 0;
+    if (waitpid(pid, &status, 0) < 0) return -1;
+    if (WIFEXITED(status)) return WEXITSTATUS(status);
+    return -1;
+#endif
+}
+
+/// True when `p`, lexically normalized, stays inside `root` (no `..`
+/// escape). Used to confine RPC-supplied write paths to the assets root.
+bool isContainedUnder(const std::filesystem::path& root,
+                      const std::filesystem::path& p)
+{
+    namespace fs = std::filesystem;
+    if (root.empty()) return true;  // no root scanned yet → unconfined
+    const fs::path nr = (root / "").lexically_normal();
+    const fs::path np = p.lexically_normal();
+    auto ri = nr.begin(), re = nr.end();
+    auto pi = np.begin();
+    for (; ri != re; ++ri, ++pi)
+    {
+        if (ri->empty()) break;            // trailing separator on root
+        if (pi == np.end() || *pi != *ri) return false;
+    }
+    return true;
+}
+
+/// Constant-time string equality — compares every byte regardless of
+/// where the first mismatch is, so an attacker can't recover the secret
+/// one byte at a time from response-timing differences. Used for the
+/// inspect-server auth token.
+bool constantTimeEquals(const std::string& a, const char* b)
+{
+    const std::size_t bn = b ? std::strlen(b) : 0;
+    // Fold the length difference into the accumulator so unequal lengths
+    // always fail, without branching on the comparison result.
+    unsigned diff = static_cast<unsigned>(a.size() ^ bn);
+    const std::size_t n = a.size();
+    for (std::size_t i = 0; i < n; ++i)
+        diff |= static_cast<unsigned char>(a[i]) ^
+                static_cast<unsigned char>(bn ? b[i % bn] : 0);
+    return diff == 0;
+}
+
+/// True when `s` is a valid C++ identifier (used to vet a generated
+/// class name before it becomes a filename / type token).
+bool isCppIdentifier(const std::string& s)
+{
+    if (s.empty()) return false;
+    if (!(std::isalpha((unsigned char)s[0]) || s[0] == '_')) return false;
+    for (char c : s)
+        if (!(std::isalnum((unsigned char)c) || c == '_')) return false;
+    return true;
+}
 
 /// Tokenize by whitespace.
 std::vector<std::string> split(const std::string& s)
@@ -186,16 +287,16 @@ opencs::Node findChildByName(const opencs::Node& parent, std::string_view name)
 /// success, empty on any failure. Caller checks for empty to know.
 std::string httpGet(const std::string& url, int timeoutSec = 10)
 {
-    char cmd[2048];
-    std::snprintf(cmd, sizeof(cmd),
-        "/usr/bin/curl -sL --max-time %d '%s' 2>/dev/null",
-        timeoutSec, url.c_str());
-    FILE* f = popen(cmd, "r");
-    if (!f) return {};
+    // Reject non-http(s) schemes so curl can't be steered to file://,
+    // scp://, etc. No shell is used, so the URL is passed as a literal arg.
+    if (url.rfind("http://", 0) != 0 && url.rfind("https://", 0) != 0)
+        return {};
     std::string out;
-    char buf[1024];
-    while (std::size_t n = std::fread(buf, 1, sizeof(buf), f)) out.append(buf, n);
-    int rc = pclose(f);
+    int rc = runCapture({"/usr/bin/curl", "-sS",
+                         "--proto", "=http,https",
+                         "--proto-redir", "=http,https",
+                         "-L", "--max-time", std::to_string(timeoutSec),
+                         url}, out);
     if (rc != 0) return {};
     return out;
 }
@@ -207,18 +308,16 @@ std::string httpDownload(const std::string& url,
                          int timeoutSec = 30)
 {
     namespace fs = std::filesystem;
+    if (url.rfind("http://", 0) != 0 && url.rfind("https://", 0) != 0)
+        return "only http/https URLs are allowed";
     std::error_code ec;
     fs::create_directories(fs::path(dst).parent_path(), ec);
-    char cmd[4096];
-    std::snprintf(cmd, sizeof(cmd),
-        "/usr/bin/curl -sL --max-time %d --fail '%s' -o '%s' 2>&1",
-        timeoutSec, url.c_str(), dst.c_str());
-    FILE* f = popen(cmd, "r");
-    if (!f) return "popen failed";
     std::string err;
-    char buf[256];
-    while (std::fgets(buf, sizeof(buf), f)) err += buf;
-    int rc = pclose(f);
+    int rc = runCapture({"/usr/bin/curl", "-sS",
+                         "--proto", "=http,https",
+                         "--proto-redir", "=http,https",
+                         "-L", "--max-time", std::to_string(timeoutSec),
+                         "--fail", url, "-o", dst}, err);
     if (rc != 0)
     {
         if (!err.empty() && err.back() == '\n') err.pop_back();
@@ -270,41 +369,29 @@ std::string rasterizeSvg(const std::filesystem::path& src,
     std::error_code ec;
     fs::create_directories(dst.parent_path(), ec);
 
-    char cmd[4096];
+    std::vector<std::string> argv;
     if (tool.find("rsvg-convert") != std::string::npos)
     {
+        argv = {tool};
         if (W > 0 && H > 0)
-            std::snprintf(cmd, sizeof(cmd),
-                "'%s' -w %d -h %d '%s' -o '%s' 2>&1",
-                tool.c_str(), W, H,
-                src.string().c_str(), dst.string().c_str());
-        else
-            std::snprintf(cmd, sizeof(cmd),
-                "'%s' '%s' -o '%s' 2>&1",
-                tool.c_str(),
-                src.string().c_str(), dst.string().c_str());
+        { argv.push_back("-w"); argv.push_back(std::to_string(W));
+          argv.push_back("-h"); argv.push_back(std::to_string(H)); }
+        argv.push_back(src.string());
+        argv.push_back("-o");
+        argv.push_back(dst.string());
     }
     else  // Inkscape
     {
+        argv = {tool, "--export-type=png",
+                "--export-filename=" + dst.string()};
         if (W > 0 && H > 0)
-            std::snprintf(cmd, sizeof(cmd),
-                "'%s' --export-type=png --export-filename='%s' "
-                "--export-width=%d --export-height=%d '%s' 2>&1",
-                tool.c_str(), dst.string().c_str(), W, H,
-                src.string().c_str());
-        else
-            std::snprintf(cmd, sizeof(cmd),
-                "'%s' --export-type=png --export-filename='%s' '%s' 2>&1",
-                tool.c_str(),
-                dst.string().c_str(), src.string().c_str());
+        { argv.push_back("--export-width=" + std::to_string(W));
+          argv.push_back("--export-height=" + std::to_string(H)); }
+        argv.push_back(src.string());
     }
 
-    FILE* f = popen(cmd, "r");
-    if (!f) return "popen failed";
     std::string out;
-    char buf[256];
-    while (std::fgets(buf, sizeof(buf), f)) out += buf;
-    int rc = pclose(f);
+    int rc = runCapture(argv, out);
     if (rc != 0)
     {
         if (!out.empty() && out.back() == '\n') out.pop_back();
@@ -338,47 +425,55 @@ std::vector<std::string> splitNamePath(const std::string& s)
 }  // namespace
 
 std::string Editor::handleInspectCommand(const std::string& line,
-                                         InspectReply* reply)
+                                         InspectReply* reply,
+                                         bool* connAuthed)
 {
     (void)reply;  // unused until a handler decides to defer
+    // Per-connection auth flag. Internal/recursive replays pass nullptr
+    // (no socket of their own); they only run because an outer command
+    // already passed the gate, so treat them as authed.
+    bool internalAuthed = true;
+    bool& authed = connAuthed ? *connAuthed : internalAuthed;
+
     const auto toks = split(line);
     if (toks.empty()) return "ERR: empty";
 
     const std::string& cmd = toks[0];
 
     // -- auth gate --------------------------------------------------------
-    // If OCS_INSPECT_TOKEN is set in the environment, mutation /
-    // destructive commands require a prior `auth <token>` line on the
-    // RPC channel. Read-only inspect (graph/tree/dump/help/etc.) stays
-    // open so external tools can sanity-check without first authing.
+    // Every command that is not on the read-only allowlist below requires
+    // a prior `auth <token>` on this connection. The token is always set
+    // when the server runs (OCS_INSPECT_TOKEN, or a random per-session
+    // token written to inspect.token — see Editor ctor). Allowlist, not
+    // denylist: a newly added command is privileged until someone
+    // deliberately marks it read-only. Auth is tracked per connection,
+    // so authing one socket does not unlock another.
+    const std::string& token = _inspect.token();
     if (cmd == "auth")
     {
-        const char* env = std::getenv("OCS_INSPECT_TOKEN");
-        if (!env || !*env) { _rpcAuthed = true; return "ok (no token configured)\n"; }
+        if (token.empty()) { authed = true; return "ok (no token configured)\n"; }
         if (toks.size() < 2) return "ERR: auth <token>\n";
-        _rpcAuthed = (toks[1] == env);
-        return _rpcAuthed ? "ok\n" : "ERR: bad token\n";
+        authed = constantTimeEquals(toks[1], token.c_str());
+        return authed ? "ok\n" : "ERR: bad token\n";
     }
     {
-        // List of cmds whose effect mutates the doc OR triggers a
-        // file/system action. Anything not in this list is treated as
-        // read-only inspect.
-        static const std::set<std::string> kMutating = {
-            "setattr", "setcolor", "setbgcolor", "setfile",
-            "setpanelimage", "setvisible", "size", "scale", "rotate",
-            "delete", "addchild", "undo", "redo", "save", "reload",
-            "export", "script", "apply-to-scenes", "preview",
-            "preview-visual", "screenshot", "screenshot-canvas", "setlabel",
-            "svg-rasterize", "svg-bake",
-            "addbinding", "delbinding",
-            "download",
-            "vmap-add-layer", "vmap-add-prim",
-            "vmap-add-keyframe", "vmap-set-anim",
-            "litsprite-add-light",
-            "gen-controller",
+        // Pure inspection: no document mutation, no filesystem writes,
+        // no simulated input, no process spawns.
+        static const std::set<std::string> kReadOnly = {
+            "help", "describe", "graph", "graph2", "diff-graph",
+            "overlay-graph", "rotdump", "side-by-side", "controls",
+            "tree", "tree-since", "dump", "selected", "scene", "canvas",
+            "roots", "state", "display", "mouse", "events", "assets",
+            "getattr", "listbindings", "list-textures", "refs", "used-by",
+            "validate",
         };
-        const char* env = std::getenv("OCS_INSPECT_TOKEN");
-        if (env && *env && !_rpcAuthed && kMutating.count(cmd))
+        // `log` is read-only except its `level` / `clear` subcommands.
+        const bool readOnly = kReadOnly.count(cmd) ||
+            (cmd == "log" && !(toks.size() >= 2 &&
+                               (toks[1] == "level" || toks[1] == "clear")));
+        // `mode` with no argument just reports the current mode.
+        const bool modeQuery = (cmd == "mode" && toks.size() == 1);
+        if (!token.empty() && !authed && !readOnly && !modeQuery)
             return "ERR: auth required; send 'auth <token>'\n";
     }
 
@@ -439,7 +534,7 @@ std::string Editor::handleInspectCommand(const std::string& line,
             "  script <file>           run mutation cmds line-by-line (# = comment)\n"
             "  apply-to-scenes <glob|dir> <script>   reload+script+save+export per .csd\n"
             "agentic:\n"
-            "  auth <token>            unlock mutation cmds when OCS_INSPECT_TOKEN set\n"
+            "  auth <token>            unlock non-read-only cmds (token: OCS_INSPECT_TOKEN or inspect.token file)\n"
             "  describe [ctype]        attrs + sub-elements for a known ctype\n"
             "  validate                flag broken asset refs in current doc\n"
             "  preview <cmd...>        dry-run: emit XML diff, restore state (no commit)\n"
@@ -2033,6 +2128,9 @@ std::string Editor::handleInspectCommand(const std::string& line,
         }
         std::string className = toks.size() >= 3
             ? toks[2] : (_csdPath.stem().string() + "Controller");
+        if (!isCppIdentifier(className))
+            return "ERR: className must be a valid C++ identifier "
+                   "(letters, digits, underscore; no path separators)\n";
 
         // Collect unique method names + a map method → set<event>.
         std::map<std::string, std::set<std::string>> methodEvents;
@@ -2468,8 +2566,17 @@ std::string Editor::handleInspectCommand(const std::string& line,
         // scripted asset pull.
         if (toks.size() < 3) return "ERR: download <url> <dst>\n";
         namespace fs = std::filesystem;
+        if (_assetsRoot.empty())
+            return "ERR: no assets root; open a project first\n";
         fs::path dst = toks[2];
-        if (dst.is_relative() && !_assetsRoot.empty()) dst = _assetsRoot / dst;
+        if (dst.is_relative()) dst = _assetsRoot / dst;
+        // Resolve symlinks on the existing prefix so a link inside the
+        // assets tree can't redirect the write outside it.
+        std::error_code cec;
+        const fs::path rootC = fs::weakly_canonical(_assetsRoot, cec);
+        const fs::path dstC  = fs::weakly_canonical(dst, cec);
+        if (cec || !isContainedUnder(rootC, dstC))
+            return "ERR: dst escapes assets root\n";
         auto err = httpDownload(toks[1], dst.string());
         if (!err.empty()) return "ERR: " + err + "\n";
         return std::string("ok ") + dst.string() + "\n";

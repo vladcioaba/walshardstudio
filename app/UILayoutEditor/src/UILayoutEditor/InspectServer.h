@@ -14,6 +14,7 @@
 #pragma once
 
 #include <atomic>
+#include <condition_variable>
 #include <deque>
 #include <functional>
 #include <future>
@@ -92,8 +93,13 @@ private:
 class InspectServer
 {
 public:
+    // `connAuthed` is the calling connection's auth flag — the handler
+    // reads it to gate mutations and the `auth` command writes it. Each
+    // live connection owns its own flag, so auth never leaks between
+    // connections.
     using Handler = std::function<void(const std::string& line,
-                                       InspectReply& reply)>;
+                                       InspectReply& reply,
+                                       bool& connAuthed)>;
 
     ~InspectServer();
 
@@ -116,6 +122,14 @@ public:
 
     int port() const { return _port; }
 
+    /// Shared secret clients must present via `auth <token>` before
+    /// privileged commands. Set before `start()`. Empty = no auth.
+    void setToken(std::string t) { _token = std::move(t); }
+    const std::string& token() const { return _token; }
+
+    /// Max simultaneous client connections; extra ones are refused.
+    static constexpr int kMaxConns = 16;
+
 private:
     struct Cmd;
 
@@ -129,9 +143,17 @@ private:
     std::mutex        _mu;
     std::deque<std::shared_ptr<Cmd>> _queue;
 
-    // Per-conn worker threads spawned by `runAccept`. Joined on stop().
+    std::string _token;
+
+    // Per-conn worker threads are detached; `_connFds` tracks their live
+    // sockets so stop() can shut them down, and `_activeConns` + `_connsCv`
+    // let stop() wait until every worker has finished touching `this`.
+    // (Previously joinable threads accumulated in a vector until stop(),
+    // leaking one thread stack per connection.)
     std::mutex                _connsMu;
-    std::vector<std::thread>  _conns;
+    std::condition_variable   _connsCv;
+    std::set<int>             _connFds;
+    int                       _activeConns = 0;
 
     // Subscribers (file descriptors flagged for event fan-out).
     // `_subMu` guards membership; `_writeMu` serialises every send()

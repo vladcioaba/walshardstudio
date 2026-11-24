@@ -15,6 +15,9 @@
 
 #if defined(_WIN32)
 #    define WIN32_LEAN_AND_MEAN
+#ifndef NOMINMAX  // keep <windows.h> min/max macros off std::min/std::max
+#    define NOMINMAX
+#endif
 #    include <process.h>
 #    include <windows.h>
 #else
@@ -413,7 +416,12 @@ void publish(const SelfInfo& info)
                       info.tabRects[i].second);
         body.append(line);
     }
+    // Called every frame; skip the temp-file write + rename unless the
+    // window / tab layout actually changed.
+    static std::string sLastBody;
+    if (body == sLastBody) return;
     writeAtomic(selfWindowFile(), body);
+    sLastBody = std::move(body);
 }
 
 void drainInbox(

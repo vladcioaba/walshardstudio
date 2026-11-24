@@ -15,6 +15,9 @@
 
 #if defined(_WIN32)
 #    define WIN32_LEAN_AND_MEAN
+#ifndef NOMINMAX  // keep <windows.h> min/max macros off std::min/std::max
+#    define NOMINMAX
+#endif
 #    include <process.h>
 #    include <windows.h>
 #else
@@ -353,6 +356,8 @@ void IpcLogSink::write(const LogRecord& r)
     std::fflush((FILE*)_fp);
 }
 
+std::string ipcLogDir() { return kIpcDir(); }
+
 std::vector<LogRecord> tailIpcLogs(std::size_t tailMax)
 {
     namespace fs = std::filesystem;
@@ -371,7 +376,7 @@ std::vector<LogRecord> tailIpcLogs(std::size_t tailMax)
         if (name.size() <= 13 ||
             name.compare(name.size() - 13, 13, ".messages.log") != 0)
             continue;
-        std::FILE* f = std::fopen(p.c_str(), "r");
+        std::FILE* f = std::fopen(p.string().c_str(), "r");
         if (!f) continue;
         char line[2048];
         while (std::fgets(line, sizeof(line), f))

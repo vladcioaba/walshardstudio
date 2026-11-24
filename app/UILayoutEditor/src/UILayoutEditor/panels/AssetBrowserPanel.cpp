@@ -13,7 +13,7 @@
 #include "UILayoutEditor/panels/Panels.h"
 #include "UILayoutEditor/Editor.h"
 
-#include "imgui/imgui.h"
+#include "ImGui/imgui.h"
 
 #include <algorithm>
 #include <atomic>

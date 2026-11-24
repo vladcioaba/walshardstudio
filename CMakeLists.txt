@@ -32,10 +32,19 @@ endif()
 set(_is_axmol_embed FALSE)
 set(_AX_USE_PREBUILT FALSE)
 
-# AX_ROOT: where axmol lives. Falls back to the user's known layout.
+# AX_ROOT: where axmol lives. -DAX_ROOT=..., else the AX_ROOT env var
+# (axmol's setup.ps1 sets it), else the maintainer's local layout.
 if(NOT DEFINED AX_ROOT)
-    set(AX_ROOT "/Users/Vlad/Work/GameDev/axmol" CACHE PATH "axmol engine root")
+    if(DEFINED ENV{AX_ROOT})
+        set(AX_ROOT "$ENV{AX_ROOT}" CACHE PATH "axmol engine root")
+    else()
+        set(AX_ROOT "/Users/Vlad/Work/GameDev/axmol" CACHE PATH "axmol engine root")
+    endif()
 endif()
+# Normalize to forward slashes. A Windows path like "D:\a\axmol" ends up
+# in CMAKE_MODULE_PATH, which CMake re-parses inside try_compile()
+# projects, where "\a" is an invalid escape -> configure fails.
+file(TO_CMAKE_PATH "${AX_ROOT}" AX_ROOT)
 if(NOT EXISTS "${AX_ROOT}/CMakeLists.txt")
     message(FATAL_ERROR
         "axmol not found at ${AX_ROOT}. Set -DAX_ROOT=/path/to/axmol.")

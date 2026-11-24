@@ -1,5 +1,13 @@
 # Porting Walshard Studio to Windows
 
+> **Superseded in part by [`PORTING.md`](PORTING.md)** (2026-11-24).
+> Only macOS has been built so far — the "macOS and Linux builds are
+> already working" line below is wrong. Several items here are already
+> done (`PlatformSpawn.cpp` with a Win32 branch, `%TEMP%` IPC dir,
+> `%APPDATA%` recents, Winsock in `InspectServer`, `proj.win32/`
+> scaffold). Use `PORTING.md` for current status; this file is kept for
+> its detailed notes.
+
 **Read this file end-to-end before changing any code.** It is the
 handoff brief for a Claude Code session running inside a Windows VM
 (or native Windows). The macOS and Linux builds are already working;
