@@ -1,8 +1,9 @@
 # Porting Walshard Studio to Linux and Windows
 
-**Status (2026-11-24): macOS is the only platform that has ever been
-built.** Linux and Windows have scaffolding in the tree (entry points,
-resources, platform guards, CI jobs) but neither has been compiled.
+**Status (2026-11-24): all three platforms build in CI** (macOS arm64,
+Linux x86_64, Windows x64). Only macOS has actually been run. Linux and
+Windows compile and link but have never been launched, so the next
+step is section 4 (Verifying a port) on a real machine.
 Contributions are very welcome — this document is the map.
 
 If you pick one up, please open an issue saying so (to avoid duplicate
@@ -123,9 +124,8 @@ Legend: ✅ done (but unverified on that OS unless stated) · ⬜ todo ·
 
 - ✅ `proj.linux/main.cpp`.
 - ✅ CI job (`ubuntu-22.04`) installs deps, runs `setup.ps1`.
-- ⬜ First successful configure + build. Expect warnings-as-errors
-  differences vs clang/AppleClang; fix in shared code, no
-  `#ifdef __linux__` unless it's genuinely platform behaviour.
+- ✅ Configures, compiles and links in CI (GCC, Ubuntu 22.04).
+- ⬜ First launch on a real desktop (section 4).
 - 🔍 `DragLabel.cpp` (tab tear-off ghost window) uses GL 2.1
   fixed-function in its own GLFW window. Should work under Mesa;
   verify, and check Wayland (GLFW may need `GLFW_PLATFORM_X11`
@@ -143,10 +143,10 @@ Legend: ✅ done (but unverified on that OS unless stated) · ⬜ todo ·
   `res/game.ico`, `run.bat.in`.
 - ✅ `DragLabel.cpp` includes `<windows.h>` before `<GL/gl.h>`.
 - ✅ CI job (`windows-2022`): clone path quoted, `setup.ps1` step.
-- ⬜ First successful configure + build. Likely hits: remaining
-  POSIX-isms in files not yet compiled on MSVC (`ssize_t`,
-  `strcasecmp`, `<dirent.h>`…); MSVC `min`/`max` macro clashes
-  (`NOMINMAX`); C++ conformance flags (`/permissive-`, `/Zc:__cplusplus`).
+- ✅ Configures, compiles and links in CI (MSVC 19.44, VS 2022).
+  Fixed on the way: `NOMINMAX` before direct `<windows.h>`,
+  `path::c_str()` is `wchar_t*` on MSVC (use `.string().c_str()`).
+- ⬜ First launch on a real desktop (section 4).
 - ⬜ `PlatformSpawn.cpp` uses `CreateProcessA` — switch to
   `CreateProcessW` for non-ASCII exe/scene paths.
 - ⬜ `IpcBridge`'s `processAlive` / signal handling — verify the
@@ -171,9 +171,10 @@ Legend: ✅ done (but unverified on that OS unless stated) · ⬜ todo ·
 ## 5. CI
 
 `.github/workflows/build.yml` runs macOS / Linux / Windows on pushes
-to `main` and on PRs. Linux and Windows are **expected to fail** until
-the first port lands; `fail-fast: false` keeps them from cancelling
-the macOS job. When a platform goes green, keep it green.
+to `main` and on PRs. All three jobs are green; keep them green.
+`fail-fast: false` means one platform failing doesn't cancel the others.
+Pushes to `main` upload the binaries as run artifacts; `v*` tags
+attach them to a GitHub Release. PR builds don't upload anything.
 
 [portable-file-dialogs]: https://github.com/samhocevar/portable-file-dialogs
 [nativefiledialog-extended]: https://github.com/btzy/nativefiledialog-extended
