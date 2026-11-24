@@ -56,7 +56,7 @@ sudo apt-get install -y cmake ninja-build pkg-config python3 \
   libgl1-mesa-dev libglu1-mesa-dev libglew-dev \
   libxi-dev libxinerama-dev libxrandr-dev libxcursor-dev \
   libgtk-3-dev libssl-dev libuv1-dev libpng-dev libjpeg-dev \
-  librsvg2-bin libfontconfig1-dev libvlc-dev
+  librsvg2-bin libfontconfig1-dev libvlc-dev libwebkit2gtk-4.0-dev
 cmake -S . -B build -G Ninja -DAX_ROOT=$HOME/axmol -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ```
