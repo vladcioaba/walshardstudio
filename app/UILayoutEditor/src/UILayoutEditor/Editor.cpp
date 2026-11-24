@@ -4165,7 +4165,7 @@ void Editor::drawEditOverlay()
                 {
                     const auto origin = it->second->convertToWorldSpace(ax::Vec2(0, 0));
                     _dragStartAngleRad =
-                        std::atan2f(world.y - origin.y, world.x - origin.x);
+                        std::atan2(world.y - origin.y, world.x - origin.x);
                     _dragStartRotDeg = it->second->getRotation();
                     _dragMode = DragMode::Rotate;
                     recordEvent("rotate-icon");
@@ -4357,7 +4357,7 @@ void Editor::drawEditOverlay()
                 // in degrees and clockwise-positive (opposite of math atan2).
                 const auto origin = axNode->convertToWorldSpace(ax::Vec2(0, 0));
                 const float curAng =
-                    std::atan2f(world.y - origin.y, world.x - origin.x);
+                    std::atan2(world.y - origin.y, world.x - origin.x);
                 const float deltaDeg =
                     (curAng - _dragStartAngleRad) * (180.0f / 3.14159265358979323846f);
                 float newDeg = _dragStartRotDeg - deltaDeg;   // flip sign
