@@ -2,6 +2,9 @@
 
 #if defined(_WIN32)
 #    define WIN32_LEAN_AND_MEAN
+#ifndef NOMINMAX  // keep <windows.h> min/max macros off std::min/std::max
+#    define NOMINMAX
+#endif
 #    include <winsock2.h>
 #    include <ws2tcpip.h>
 // Link the Winsock library implicitly so callers don't have to remember.

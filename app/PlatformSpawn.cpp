@@ -12,6 +12,9 @@
 
 #if defined(_WIN32)
 #    define WIN32_LEAN_AND_MEAN
+#ifndef NOMINMAX  // keep <windows.h> min/max macros off std::min/std::max
+#    define NOMINMAX
+#endif
 #    include <windows.h>
 #elif defined(__APPLE__)
 #    include <mach-o/dyld.h>
