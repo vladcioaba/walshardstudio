@@ -5402,7 +5402,7 @@ void Editor::drawMessagesBody()
                     name.compare(name.size() - 13, 13,
                                  ".messages.log") == 0)
                 {
-                    if (auto* fp = std::fopen(p.c_str(), "w"))
+                    if (auto* fp = std::fopen(p.string().c_str(), "w"))
                         std::fclose(fp);
                 }
             }

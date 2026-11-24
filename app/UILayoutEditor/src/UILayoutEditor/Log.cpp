@@ -376,7 +376,7 @@ std::vector<LogRecord> tailIpcLogs(std::size_t tailMax)
         if (name.size() <= 13 ||
             name.compare(name.size() - 13, 13, ".messages.log") != 0)
             continue;
-        std::FILE* f = std::fopen(p.c_str(), "r");
+        std::FILE* f = std::fopen(p.string().c_str(), "r");
         if (!f) continue;
         char line[2048];
         while (std::fgets(line, sizeof(line), f))
