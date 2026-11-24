@@ -102,11 +102,12 @@ Run axmol's `setup.ps1` once after cloning axmol (it downloads the
 | Platform | Status |
 |---|---|
 | macOS (arm64) | ✅ Supported |
-| Linux | 🚧 Scaffolded, never built — **help wanted** |
-| Windows | 🚧 Scaffolded, never built — **help wanted** |
+| Linux (x86_64) | 🚧 Builds in CI, never run — **help wanted** |
+| Windows (x64) | 🚧 Builds in CI, never run — **help wanted** |
 
-Entry points, Windows resources, platform guards and CI jobs for Linux
-and Windows are in the tree; nobody has compiled them yet.
+Linux and Windows compile and link in CI, but nobody has launched them
+yet, and several features are stubbed (native file dialogs, SVG and
+download tooling on Windows).
 [`PORTING.md`](PORTING.md) has the build steps, a done/todo checklist,
 and the known blockers. If you have a Linux or Windows machine, a PR
 that just gets it to configure is a real contribution.
