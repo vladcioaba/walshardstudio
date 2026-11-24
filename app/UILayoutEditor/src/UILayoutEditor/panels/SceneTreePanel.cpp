@@ -254,8 +254,14 @@ struct PendingMutation
     Node target;        // for Move ops
 };
 
+// `ancestorsVisible` / `ancestorsPropLocked` are carried down the
+// recursion so each row derives its effective visible/locked state in
+// O(1) from its parent, instead of re-walking to the document root per
+// row (the old isEffectivelyVisible/Locked calls were O(depth) each,
+// making the whole tree O(depth²) per frame).
 void drawNode(Editor& editor, const Node& node, PendingMutation& pending,
-              const std::unordered_set<void*>& forceOpen)
+              const std::unordered_set<void*>& forceOpen,
+              bool ancestorsVisible, bool ancestorsPropLocked)
 {
     const auto children = node.children();
     // Auto-expand ancestors of a freshly-changed selection so the
@@ -316,7 +322,7 @@ void drawNode(Editor& editor, const Node& node, PendingMutation& pending,
     {
         ImGui::SetCursorPosX(panelLeftX + eyeStartX);
         const bool selfVisible = node.visible();
-        const bool effVisible  = editor.isEffectivelyVisible(node);
+        const bool effVisible  = ancestorsVisible && selfVisible;
         EyeVis vis = EyeVis::Visible;
         if      (!selfVisible)             vis = EyeVis::Hidden;
         else if (!effVisible)              vis = EyeVis::Inherited;
@@ -351,7 +357,7 @@ void drawNode(Editor& editor, const Node& node, PendingMutation& pending,
     {
         const auto mode = node.lockMode();
         const bool inherited = (mode == Node::LockMode::None) &&
-                               editor.isEffectivelyLocked(node);
+                               ancestorsPropLocked;
         LockVis vis = LockVis::None;
         if      (inherited)                              vis = LockVis::Inherited;
         else if (mode == Node::LockMode::Propagating)    vis = LockVis::Propagating;
@@ -680,8 +686,17 @@ void drawNode(Editor& editor, const Node& node, PendingMutation& pending,
     }
     if (open)
     {
+        // Propagate effective state to children: a child is
+        // ancestor-visible only if this node is too; a child inherits a
+        // propagating lock if any ancestor (or this node) propagates one.
+        // Self-only locks do NOT propagate.
+        const bool childVisible = ancestorsVisible && node.visible();
+        const bool childPropLocked =
+            ancestorsPropLocked ||
+            node.lockMode() == Node::LockMode::Propagating;
         for (const auto& child : children)
-            drawNode(editor, child, pending, forceOpen);
+            drawNode(editor, child, pending, forceOpen,
+                     childVisible, childPropLocked);
         ImGui::TreePop();
     }
     if (sGapRows && myGapIdx != (std::size_t)-1)
@@ -765,7 +780,9 @@ void drawSceneTreeBody(Editor& editor)
             forceOpen.insert(cur.element().internal_object());
         }
     }
-    drawNode(editor, doc->rootNode, pending, forceOpen);
+    // Root has no ancestors: visible by default, no inherited lock.
+    drawNode(editor, doc->rootNode, pending, forceOpen,
+             /*ancestorsVisible=*/true, /*ancestorsPropLocked=*/false);
     sGapRows = nullptr;
 
     // Math-based gap detection: zero layout space. Walks the

@@ -201,6 +201,12 @@ private:
 /// the same shared queue.
 std::vector<LogRecord> tailIpcLogs(std::size_t tailMax = 1024);
 
+/// Absolute path to the per-user IPC directory holding the shared
+/// `*.messages.log` files (POSIX `/tmp/walshard`, Windows
+/// `%TEMP%\walshard`). Use this instead of hardcoding the path so
+/// readers and writers always agree.
+std::string ipcLogDir();
+
 /// Cross-process log-level coordinator. Writes the chosen level to
 /// `~/.walshard.loglevel` so every OCS process picks it up —
 /// without it, dropping the level in one Messages panel only

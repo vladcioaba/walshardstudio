@@ -353,6 +353,8 @@ void IpcLogSink::write(const LogRecord& r)
     std::fflush((FILE*)_fp);
 }
 
+std::string ipcLogDir() { return kIpcDir(); }
+
 std::vector<LogRecord> tailIpcLogs(std::size_t tailMax)
 {
     namespace fs = std::filesystem;

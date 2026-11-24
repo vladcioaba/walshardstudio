@@ -14,8 +14,32 @@ from __future__ import annotations
 
 import os
 import socket
+import sys
 import time
 from dataclasses import dataclass
+from pathlib import Path
+
+
+def default_token_file() -> Path:
+    """Where the editor writes its per-session inspect token when
+    ``OCS_INSPECT_TOKEN`` is not set (next to recents.txt)."""
+    home = Path.home()
+    if sys.platform == "darwin":
+        base = home / "Library" / "Application Support"
+    elif sys.platform == "win32":
+        base = Path(os.environ.get("APPDATA") or home)
+    else:
+        base = Path(os.environ.get("XDG_DATA_HOME") or home / ".local" / "share")
+    return base / "Walshard Studio" / "inspect.token"
+
+
+def _read_token_file() -> str | None:
+    path = Path(os.environ.get("WALSHARD_TOKEN_FILE") or default_token_file())
+    try:
+        tok = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return tok or None
 
 
 @dataclass(frozen=True)
@@ -33,7 +57,8 @@ class WalshardClientConfig:
                                     os.environ.get("WALSHARD_PORT", "9876"))),
             timeout_s=float(os.environ.get("WALSHARD_TIMEOUT_S", "10")),
             token=os.environ.get("OCS_INSPECT_TOKEN") or
-                  os.environ.get("WALSHARD_TOKEN"),
+                  os.environ.get("WALSHARD_TOKEN") or
+                  _read_token_file(),
         )
 
 
@@ -76,8 +101,9 @@ class WalshardClient:
             try: sock.close()
             except Exception: pass
 
-        if reply.startswith("ERR "):
-            raise WalshardError(reply[4:].strip())
+        # The editor's error replies are "ERR: <msg>".
+        if reply.startswith("ERR"):
+            raise WalshardError(reply[3:].lstrip(": ").strip())
         return reply
 
     # --- internal helpers -------------------------------------------------
@@ -131,6 +157,6 @@ def _looks_continuable(buf: bytes) -> bool:
     catches separately."""
     head, _, _ = buf.partition(b"\n")
     s = head.decode("utf-8", errors="replace").strip()
-    if s.startswith("ok ") or s == "ok" or s.startswith("ERR "):
+    if s.startswith("ok ") or s == "ok" or s.startswith("ERR"):
         return False
     return True

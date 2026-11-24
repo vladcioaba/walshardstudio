@@ -2,6 +2,7 @@
 build/
 build.axmol/
 build.tests/
+build.verify/
 dist/
 *.o
 *.obj

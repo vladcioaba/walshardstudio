@@ -179,6 +179,11 @@ void Editor::pushUndo()
     std::ostringstream ss;
     _doc->doc.save(ss, "", pugi::format_raw | pugi::format_no_declaration);
     _undoStack.push_back(ss.str());
+    // Bound the stack: each entry is a full-document XML snapshot, so an
+    // untrimmed stack grows without limit over a long editing session.
+    // Keep the most recent kMaxUndo states; drop the oldest.
+    constexpr std::size_t kMaxUndo = 100;
+    while (_undoStack.size() > kMaxUndo) _undoStack.pop_front();
     _redoStack.clear();
     // Mirror the fresh snapshot to the sidecar so a crash mid-edit
     // doesn't lose work. saveToCurrent / saveAs clean the file up on

@@ -1,6 +1,6 @@
 name: build
 
-# CI: macOS (arm64) + Linux (x86_64) matrix.
+# CI: macOS (arm64) + Linux (x86_64) + Windows (x64) matrix.
 #
 # Triggers:
 #   * push to main         → build + upload artifact (30-day retention)
@@ -21,9 +21,19 @@ on:
 env:
   AXMOL_REF: v2.9.1
 
+# Cancel superseded runs on the same ref to save runner minutes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Needed by softprops/action-gh-release to upload assets on tag.
+permissions:
+  contents: write
+
 jobs:
   build:
     name: ${{ matrix.label }}
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -98,7 +108,7 @@ jobs:
         run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DAX_ROOT="${{ runner.workspace }}/axmol"
 
       - name: Build
-        run: cmake --build build --config Release -j
+        run: cmake --build build --config Release --parallel
 
       - name: Package (macOS)
         if: matrix.os == 'macos-14'

@@ -413,7 +413,12 @@ void publish(const SelfInfo& info)
                       info.tabRects[i].second);
         body.append(line);
     }
+    // Called every frame; skip the temp-file write + rename unless the
+    // window / tab layout actually changed.
+    static std::string sLastBody;
+    if (body == sLastBody) return;
     writeAtomic(selfWindowFile(), body);
+    sLastBody = std::move(body);
 }
 
 void drainInbox(
